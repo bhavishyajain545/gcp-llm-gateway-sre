@@ -17,7 +17,7 @@ resource "random_password" "admin_key" {
 locals {
   # name => quotas. Models empty = every configured model.
   tenants = {
-    "team-platform" = { rpm = 600, burst = 100, daily_tokens = 2000000, models = [] }
+    "team-platform" = { rpm = 3000, burst = 300, daily_tokens = 5000000, models = [] }
     "team-support"  = { rpm = 60, burst = 10, daily_tokens = 50000, models = ["gemini-3.5-flash-lite"] }
     "team-burst"    = { rpm = 30, burst = 10, daily_tokens = 20000, models = [] }
   }

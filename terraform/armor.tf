@@ -1,14 +1,17 @@
 # Cloud Armor at the load balancer edge, attached to the Service through a
 # GCPBackendPolicy (k8s/base/backendpolicy.yaml). Tenant quotas live in the
 # gateway; this layer stops abusive clients and injection attempts before they
-# consume a pod.
+# consume a pod. Rules are evaluated in priority order and evaluation stops at
+# the first match, so the WAF deny rules come BEFORE the catch-all throttle
+# (with the throttle first, its "*" match swallowed every request and the WAF
+# never ran: found while testing).
 resource "google_compute_security_policy" "edge" {
   name        = "${var.cluster_name}-edge"
   description = "Per-IP throttle + OWASP SQLi/XSS in front of the LLM gateway"
   depends_on  = [google_project_service.apis]
 
   rule {
-    priority    = 1000
+    priority    = 2000
     action      = "throttle"
     description = "Per client IP: ${var.armor_rpm_per_ip} requests/minute, then 429"
     match {
@@ -29,7 +32,7 @@ resource "google_compute_security_policy" "edge" {
   }
 
   rule {
-    priority    = 2000
+    priority    = 1000
     action      = "deny(403)"
     description = "Preconfigured WAF: SQL injection"
     match {
@@ -40,7 +43,7 @@ resource "google_compute_security_policy" "edge" {
   }
 
   rule {
-    priority    = 2001
+    priority    = 1001
     action      = "deny(403)"
     description = "Preconfigured WAF: cross-site scripting"
     match {

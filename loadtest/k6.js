@@ -4,7 +4,7 @@
 //   burst_tenant a low-quota tenant hammering        -> 429s from the gateway's token bucket, not errors
 // Thresholds encode the SLOs: TTFT p95 < 2 s on cold streams, < 0.5% gateway/provider errors.
 import http from "k6/http";
-import { check } from "k6";
+import { check, sleep } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
 
 const BASE = __ENV.GATEWAY_URL || "http://llm-gateway.llm-gateway.svc.cluster.local";
@@ -21,6 +21,9 @@ const gatewayErrors = new Rate("gateway_errors");
 const tokens = new Counter("completion_tokens");
 
 export const options = {
+  // New TCP connection per request: with keep-alive every VU stays pinned to the first pods it
+  // reached through the Service and new replicas see no traffic (first run: 2 of 8 pods at 100% CPU).
+  noConnectionReuse: true,
   scenarios: {
     warm_cache: {
       executor: "constant-vus", vus: 4, duration: DURATION, exec: "warm",
@@ -43,6 +46,7 @@ export const options = {
   thresholds: {
     "ttft_cold_ms": ["p(95)<2000"],
     "gateway_errors": ["rate<0.005"],
+    "rate_limited{scenario:unique}": ["rate<0.01"], // the platform tenant must not hit its own quota
     "http_req_failed{scenario:unique}": ["rate<0.01"],
   },
   summaryTrendStats: ["avg", "p(50)", "p(95)", "p(99)", "max"],
@@ -66,13 +70,24 @@ function chat(key, prompt, stream, extraTags) {
   });
 }
 
+// A 429 means the tenant's bucket is empty: back off instead of spinning (the first run hammered
+// 1,800 req/s of 429s and measured nothing useful).
+function settle(res) {
+  gatewayErrors.add(res.status >= 500);
+  rateLimited.add(res.status === 429);
+  if (res.status === 429) sleep(1);
+}
+
 export function warm() {
   const topic = topics[Math.floor(Math.random() * topics.length)];
   const res = chat(KEY_PLATFORM, `Explain ${topic} briefly.`, true, { kind: "warm" });
-  const hit = res.headers["X-Cache"] && res.headers["X-Cache"] !== "miss";
-  if (hit) { cacheHits.add(1); ttftWarm.add(res.timings.waiting); } else { ttftCold.add(res.timings.waiting); }
-  gatewayErrors.add(res.status >= 500);
+  if (res.status === 200) {
+    const hit = res.headers["X-Cache"] && res.headers["X-Cache"] !== "miss";
+    if (hit) { cacheHits.add(1); ttftWarm.add(res.timings.waiting); } else { ttftCold.add(res.timings.waiting); }
+  }
+  settle(res);
   check(res, { "warm: 200": (r) => r.status === 200 });
+  sleep(0.5);
 }
 
 export function unique() {
@@ -83,14 +98,13 @@ export function unique() {
     const m = /"completion_tokens":(\d+)/.exec(res.body || "");
     if (m) tokens.add(Number(m[1]));
   }
-  gatewayErrors.add(res.status >= 500);
-  rateLimited.add(res.status === 429);
+  settle(res);
   check(res, { "unique: 200": (r) => r.status === 200, "unique: SSE done": (r) => r.status !== 200 || (r.body || "").includes("[DONE]") });
+  sleep(0.3);
 }
 
 export function burst() {
   const res = chat(KEY_BURST, `Burst ${__VU}-${__ITER}: what is a runbook?`, false, { kind: "burst" });
-  rateLimited.add(res.status === 429);
-  gatewayErrors.add(res.status >= 500);
+  settle(res);
   check(res, { "burst: 200 or 429": (r) => r.status === 200 || r.status === 429 });
 }
