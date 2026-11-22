@@ -1,0 +1,20 @@
+# Attaches the Cloud Armor policy (terraform/armor.tf) to the backend service
+# the Gateway creates, and raises the backend timeout for long streams.
+apiVersion: networking.gke.io/v1
+kind: GCPBackendPolicy
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  default:
+    securityPolicy: llm-gateway-edge
+    timeoutSec: 300
+    connectionDraining:
+      drainingTimeoutSec: 30
+    logging:
+      enabled: true
+      sampleRate: 1000000   # 100% while demoing; lower in production
+  targetRef:
+    group: ""
+    kind: Service
+    name: llm-gateway

@@ -1,0 +1,11 @@
+# Spot preemption and node upgrades take one pod at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: llm-gateway

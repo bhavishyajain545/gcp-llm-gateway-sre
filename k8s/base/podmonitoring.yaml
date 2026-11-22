@@ -1,0 +1,15 @@
+# Google Managed Prometheus scrapes /metrics every 15 s (the HPA reads
+# llm_inflight_requests from here, so a short interval keeps scaling responsive).
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  selector:
+    matchLabels:
+      app: llm-gateway
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

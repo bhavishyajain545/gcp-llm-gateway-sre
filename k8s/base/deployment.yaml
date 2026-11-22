@@ -1,0 +1,102 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+  labels:
+    app: llm-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llm-gateway
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  template:
+    metadata:
+      labels:
+        app: llm-gateway
+    spec:
+      serviceAccountName: llm-gateway
+      automountServiceAccountToken: false
+      # Spot pool: cheap, preemptible; the PDB + 2 replicas + global LB make that fine for a stateless gateway.
+      nodeSelector:
+        pool: gateway
+      tolerations:
+        - key: pool
+          operator: Equal
+          value: gateway
+          effect: NoSchedule
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: llm-gateway
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: gateway
+          image: us-central1-docker.pkg.dev/bj-llm-gateway/apps/llm-gateway:v1
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: GOOGLE_CLOUD_PROJECT
+              value: bj-llm-gateway
+            - name: GEMINI_LOCATION
+              value: global
+            - name: MODELS
+              value: gemini-3.8-flash,gemini-3.5-flash-lite
+            - name: DEFAULT_MODEL
+              value: gemini-3.8-flash
+            - name: MODEL_FALLBACKS
+              value: gemini-3.8-flash=gemini-3.5-flash-lite
+            - name: THINKING_LEVEL
+              value: LOW
+            # Everything secret comes from Secret Manager through Workload Identity.
+            - name: TENANTS_SECRET
+              value: projects/bj-llm-gateway/secrets/llm-gateway-tenants/versions/latest
+            - name: ADMIN_KEY_SECRET
+              value: projects/bj-llm-gateway/secrets/llm-gateway-admin-key/versions/latest
+            - name: REDIS_SECRET
+              value: projects/bj-llm-gateway/secrets/llm-gateway-redis/versions/latest
+            - name: SEMANTIC_CACHE
+              value: "true"
+            - name: SEMANTIC_THRESHOLD
+              value: "0.95"
+            - name: TRACE_EXPORTER
+              value: gcp
+            - name: TRACE_RATIO
+              value: "1.0" # demo: trace everything; 0.05-0.2 in production
+          resources:
+            requests:
+              cpu: 250m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            initialDelaySeconds: 3
+      terminationGracePeriodSeconds: 30

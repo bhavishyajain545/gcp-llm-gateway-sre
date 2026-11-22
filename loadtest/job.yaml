@@ -1,0 +1,68 @@
+# k6 runs inside the cluster against the Service (not through the load balancer,
+# so Cloud Armor's per-IP throttle does not see one NAT address doing everything).
+# run.sh creates the k6-keys Secret from Terraform outputs and applies this.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: k6
+  namespace: llm-gateway
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        app: k6
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        pool: system
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 12345
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: k6
+          image: grafana/k6:1.5.0
+          args: ["run", "--summary-export=/tmp/summary.json", "/scripts/k6.js"]
+          env:
+            - name: GATEWAY_URL
+              value: http://llm-gateway.llm-gateway.svc.cluster.local
+            - name: DURATION
+              value: 120s
+            - name: PEAK_VUS
+              value: "24"
+            - name: KEY_PLATFORM
+              valueFrom:
+                secretKeyRef:
+                  name: k6-keys
+                  key: platform
+            - name: KEY_BURST
+              valueFrom:
+                secretKeyRef:
+                  name: k6-keys
+                  key: burst
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: scripts
+          configMap:
+            name: k6-script
+        - name: tmp
+          emptyDir: {}

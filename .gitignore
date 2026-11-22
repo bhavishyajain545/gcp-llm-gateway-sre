@@ -1,0 +1,17 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/.terraform.lock.hcl
+terraform/crash.log
+
+# Demo recorder scratch
+demo/_video/
+demo/tts/
+demo/__pycache__/
+__pycache__/
+
+# local
+.env
+*.log
+deploy-run*.log

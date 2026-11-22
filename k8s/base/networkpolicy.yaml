@@ -1,0 +1,88 @@
+# Default deny, then explicit allows (enforced by Dataplane V2 / eBPF).
+# Ingress: Google front ends + health checks, the Managed Prometheus collector,
+# and the in-cluster k6 load generator. Egress: DNS, the GKE metadata server
+# (Workload Identity tokens), Google APIs over 443, and Redis on the PSA range.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: llm-gateway
+spec:
+  podSelector: {}
+  policyTypes: ["Ingress", "Egress"]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llm-gateway
+  namespace: llm-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: llm-gateway
+  policyTypes: ["Ingress", "Egress"]
+  ingress:
+    - from:
+        - ipBlock: { cidr: 130.211.0.0/22 }   # Google load balancer / health checks
+        - ipBlock: { cidr: 35.191.0.0/16 }
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: gmp-system   # Managed Prometheus collector
+        - podSelector:
+            matchLabels:
+              app: k6                                   # loadtest/ job
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - ports:                                            # DNS (kube-dns / NodeLocal DNSCache)
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:                                               # GKE metadata server: Workload Identity tokens
+        - ipBlock: { cidr: 169.254.169.254/32 }
+        - ipBlock: { cidr: 169.254.169.252/32 }
+      ports:
+        - port: 80
+          protocol: TCP
+        - port: 988
+          protocol: TCP
+    - to:                                               # Vertex AI, Secret Manager, Cloud Trace (Private Google Access)
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+      ports:
+        - port: 443
+          protocol: TCP
+    - to:                                               # Memorystore over Private Service Access
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+      ports:
+        - port: 6379
+          protocol: TCP
+---
+# The k6 job only needs DNS and the gateway Service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: k6
+  namespace: llm-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: k6
+  policyTypes: ["Egress"]
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: llm-gateway
+      ports:
+        - port: 8080
+          protocol: TCP
