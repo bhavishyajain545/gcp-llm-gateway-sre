@@ -16,4 +16,4 @@ resources:
 # CI updates newTag on every merge to main; `kubectl apply -k k8s/base` (deploy.sh rollout) applies it.
 images:
   - name: us-central1-docker.pkg.dev/bj-llm-gateway/apps/llm-gateway
-    newTag: v1
+    newTag: sha-3573c6e
