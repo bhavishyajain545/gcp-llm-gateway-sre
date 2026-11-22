@@ -266,10 +266,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2. cache (exact, then semantic)
+	// 2. cache (exact, then semantic). "Cache-Control: no-cache" skips the lookups (the answer is
+	// still stored): for prompts that differ only in a number or a name, where a semantic hit would be wrong.
 	st.ns = tenant.Name + "|" + req.Model
 	st.key = cacheKey(st.ns, &req)
-	if cached, err := s.cache.GetExact(ctx, st.ns, st.key); err != nil {
+	bypass := strings.Contains(strings.ToLower(r.Header.Get("Cache-Control")), "no-cache")
+	if bypass {
+		cacheEvents.WithLabelValues("exact", "bypass").Inc()
+	} else if cached, err := s.cache.GetExact(ctx, st.ns, st.key); err != nil {
 		cacheEvents.WithLabelValues("exact", "error").Inc()
 	} else if cached != nil {
 		cacheEvents.WithLabelValues("exact", "hit").Inc()
@@ -278,7 +282,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	} else {
 		cacheEvents.WithLabelValues("exact", "miss").Inc()
 	}
-	if s.cfg.SemanticEnabled {
+	if s.cfg.SemanticEnabled && !bypass {
 		if text := lastUserText(&req); text != "" {
 			if vec, err := s.up.Embed(ctx, text); err != nil {
 				cacheEvents.WithLabelValues("semantic", "error").Inc()

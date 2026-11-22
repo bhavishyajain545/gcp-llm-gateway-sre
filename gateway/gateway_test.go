@@ -204,6 +204,18 @@ func TestSemanticCacheIsPerTenant(t *testing.T) {
 	if resp.Header.Get("x-cache") != "miss" {
 		t.Fatalf("cache must be namespaced per tenant, got %q", resp.Header.Get("x-cache"))
 	}
+	// Cache-Control: no-cache skips both lookups.
+	b, _ := json.Marshal(map[string]any{"messages": []map[string]string{{"role": "user", "content": "What is an SLO?"}}})
+	req, _ := http.NewRequest(http.MethodPost, hs.URL+"/v1/chat/completions", strings.NewReader(string(b)))
+	req.Header.Set("Authorization", "Bearer key-a")
+	req.Header.Set("Cache-Control", "no-cache")
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil || r2.StatusCode != 200 || r2.Header.Get("x-cache") != "miss" {
+		t.Fatalf("no-cache bypass: %v %v", err, r2.Header)
+	}
+	if fake.count("gemini-3.8-flash") != 3 { // team-a miss, team-c miss, bypass
+		t.Fatalf("bypass must call upstream, calls = %d", fake.count("gemini-3.8-flash"))
+	}
 }
 
 func TestRateLimit(t *testing.T) {
