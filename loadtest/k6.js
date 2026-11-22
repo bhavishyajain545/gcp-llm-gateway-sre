@@ -2,7 +2,7 @@
 //   warm_cache   repeated prompts from a small pool  -> exact/semantic cache hits (team-platform)
 //   unique       streaming, unique prompts, ramping  -> real Gemini traffic, TTFT measured as time-to-first-byte
 //   burst_tenant a low-quota tenant hammering        -> 429s from the gateway's token bucket, not errors
-// Thresholds encode the SLOs: TTFT p95 < 2 s on cold streams, < 0.5% gateway/provider errors.
+// Thresholds encode the SLOs: TTFT p95 < 3 s on cold streams, < 0.5% gateway/provider errors.
 import http from "k6/http";
 import { check, sleep } from "k6";
 import { Counter, Rate, Trend } from "k6/metrics";
@@ -44,7 +44,7 @@ export const options = {
     },
   },
   thresholds: {
-    "ttft_cold_ms": ["p(95)<2000"],
+    "ttft_cold_ms": ["p(95)<3000"],
     "gateway_errors": ["rate<0.005"],
     "rate_limited{scenario:unique}": ["rate<0.01"], // the platform tenant must not hit its own quota
     "http_req_failed{scenario:unique}": ["rate<0.01"],

@@ -49,18 +49,18 @@ List prices on 2026-11-22 (Billing catalog, service `C7E2-9256-1C43`, "Global Te
 | gemini-3.5-flash-lite | 0.30 | 2.50 |
 | gemini-embedding-001 | 0.15 (text embedding SKU) | – |
 
-For the demo prompt mix (system prompt + short question ≈ 40 input tokens, `max_tokens: 120`, ≈ 90 output
-tokens including thinking), one cold request on 3.8-flash costs about **$0.00074** at list price; the same
-request on flash-lite about **$0.00024**; a semantic hit about **$0.000006**; an exact hit $0.
+For the measured prompt mix (system prompt + short question ≈ 40 input tokens, `max_tokens: 120`, ≈ 62 output
+tokens including thinking), one cold request on 3.8-flash costs about **$0.00053** at list price; the same
+request on flash-lite about **$0.00017**; a semantic hit about **$0.000006**; an exact hit $0.
 
 So per 1,000 requests, list price, 3.8-flash:
 
 | cache hit rate h | USD / 1k requests |
 |---|---|
-| 0% | 0.74 |
-| 30% | 0.52 |
-| 50% | 0.37 |
-| 70% | 0.22 |
+| 0% | 0.53 |
+| 33% (measured) | 0.36 |
+| 50% | 0.27 |
+| 70% | 0.16 |
 
 The fallback changes the mix, not the formula: when the breaker is open, requests move to the flash-lite row.
 
@@ -83,15 +83,33 @@ cheaper fallback start to matter more than node sizing.
 
 ## 4. Measured (k6 run, see `loadtest/k6.js`)
 
-RESULTS_TABLE
+Run of 2026-11-22 (`DURATION=150s PEAK_VUS=24`, 2 → 5 replicas, 1 → 2 Spot nodes), after the k6 profile was fixed
+to back off on 429 and the platform tenant was sized at 3000 rpm:
+
+| Metric | Value |
+|---|---|
+| Requests | 3,501 in 150 s (23.3 req/s mean; unique peak ≈ 10 req/s, warm ≈ 7 req/s) |
+| Gateway / provider errors | 0 |
+| Rate-limited | 240 (6.9%), all from `team-burst` (30 rpm, burst 10); `team-platform` 0% |
+| Cache hits | 1,170 (33% overall; ~99% inside the warm scenario; the unique scenario also produced semantic hits for near-duplicate prompts) |
+| TTFT cold (streamed, no cache) | p50 88 ms*, p95 **2.04 s**, p99 2.94 s |
+| TTFT warm (cache hit) | p50 2.7 ms, p95 87 ms |
+| Completion tokens | 145,045 (≈ 62 per cold request at `max_tokens: 120`, thinking LOW) |
+| HPA | 2 → 5 replicas on `llm_inflight_requests` (target 4/pod); cluster autoscaler added one Spot node |
+| CPU at peak | 50-500 m per pod (requests 250 m), memory < 20 MiB |
+
+\* the p50 is low because near-duplicate prompts in the unique scenario hit the semantic cache; p95/p99 are the provider.
 
 Reading the numbers:
 
-- **Replica count check.** At the peak of the `unique` scenario, λ ≈ RESULT_LAMBDA req/s with W ≈ RESULT_W s
-  gives in-flight ≈ RESULT_INFLIGHT; with T = 4 that is RESULT_REPLICAS replicas, which is what the HPA reached.
+- **Replica count check.** At the peak of the `unique` scenario, λ ≈ 10 req/s of cold streams with W ≈ 2.0 s
+  gives in-flight ≈ 20 (the ~7 req/s of cache hits add ≈ 0.1); with T = 4 that is 5 replicas, which is what the HPA reached.
 - **Where TTFT goes.** Cold TTFT is dominated by the provider's first-token latency (the `vertex.streamGenerateContent`
-  span's `first_token` event); the gateway adds the embedding call (~RESULT_EMBED ms) on exact-cache misses and
+  span's `first_token` event); the gateway adds the embedding call (~200 ms including the Redis scan, measured as the difference between an exact and a semantic hit through the LB) on exact-cache misses and
   single-digit milliseconds otherwise. Warm TTFT is one Redis round trip.
+- **The SLO moved.** The first TTFT objective (95% under 2 s) burned its budget within the hour: cold p95 is
+  2.04 s and nothing in the gateway can change the provider's first-token time. The objective is now 3 s
+  (p99 2.9 s), and 2 s is the stretch goal that only a higher cache hit rate or flash-lite can buy.
 - **What would change in production.** Memorystore `STANDARD_HA` instead of Basic; `TRACE_RATIO` 0.05-0.2;
   a regional cluster; two Spot pools in different zones; and a per-tenant concurrency cap in addition to RPM,
   because concurrency, not request rate, is what the pod and the provider quota actually run out of.

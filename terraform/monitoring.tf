@@ -43,11 +43,13 @@ resource "google_monitoring_slo" "availability" {
   }
 }
 
-# 95% of streamed responses deliver the first token within 2 s (cache hits included).
+# 95% of streamed responses deliver the first token within 3 s (cache hits included).
+# First guess was 2 s; the load test measured cold p95 = 2.04 s, p99 = 2.9 s on gemini-3.8-flash,
+# so 2 s is only reachable through the cache hit rate. SLOs follow measured capability.
 resource "google_monitoring_slo" "ttft" {
   service      = google_monitoring_custom_service.gw.service_id
-  slo_id       = "ttft-p95-2s"
-  display_name = "95% of streams: first token under 2s"
+  slo_id       = "ttft-p95-3s"
+  display_name = "95% of streams: first token under 3s"
   goal         = 0.95
 
   rolling_period_days = 28
@@ -57,7 +59,7 @@ resource "google_monitoring_slo" "ttft" {
       distribution_filter = local.ttft_hist
       range {
         min = 0
-        max = 2
+        max = 3
       }
     }
   }

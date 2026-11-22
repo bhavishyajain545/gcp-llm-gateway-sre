@@ -33,6 +33,6 @@ c $GW/v1/chat/completions -D - -o /dev/null -H "Authorization: Bearer $K_PLAT" "
 echo "-- team-support asks for flash (expect 403): $(c -o /dev/null -w '%{http_code}' $GW/v1/chat/completions -H "Authorization: Bearer $K_SUP" "${H[@]}" -d '{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"hi"}]}')"
 echo "-- team-burst 14 parallel requests (burst 10, expect 429s):"
 seq 1 14 | xargs -P 14 -I{} curl -s --max-time 60 -o /dev/null -w '%{http_code} ' $GW/v1/chat/completions -H "Authorization: Bearer $K_BURST" -H 'content-type: application/json' -H 'cache-control: no-cache' -d '{"model":"gemini-3.5-flash-lite","max_tokens":20,"messages":[{"role":"user","content":"Say ok number {}."}]}'; echo
-echo "-- WAF payload (expect 403 through Cloud Armor): $(c -o /dev/null -w '%{http_code}' "$GW/healthz?q=%27%20OR%201%3D1--")"
+echo "-- WAF payload (expect 403 through Cloud Armor): $(c -o /dev/null -w '%{http_code}' "$GW/healthz?q=%27%20or%201%3D1%20--%20")"
 echo "-- no key (expect 401): $(c -o /dev/null -w '%{http_code}' $GW/v1/chat/completions "${H[@]}" -d '{"messages":[{"role":"user","content":"hi"}]}')"
 echo "-- metrics via LB (expect 404 when through the GFE): $(c -o /dev/null -w '%{http_code}' $GW/metrics)"

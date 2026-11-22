@@ -42,8 +42,10 @@ output "dashboard_url" {
   value = "https://console.cloud.google.com/monitoring/dashboards/builder/${element(split("/", google_monitoring_dashboard.gw.id), length(split("/", google_monitoring_dashboard.gw.id)) - 1)}?project=${var.project_id}"
 }
 
+data "google_project" "this" {}
+
 output "slo_url" {
-  value = "https://console.cloud.google.com/monitoring/services/${google_monitoring_custom_service.gw.service_id}?project=${var.project_id}"
+  value = "https://console.cloud.google.com/monitoring/services/${data.google_project.this.number}/${google_monitoring_custom_service.gw.service_id}?project=${var.project_id}"
 }
 
 output "trace_url" {

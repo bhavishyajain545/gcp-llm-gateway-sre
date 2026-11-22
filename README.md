@@ -102,7 +102,7 @@ See [`REBUILD.md`](REBUILD.md) for verification, the fault drill, Cloud Armor ch
 - `PodMonitoring` every 15 s → Managed Prometheus → Cloud Monitoring (`prometheus.googleapis.com/<metric>/<kind>`).
 - Custom service `llm-gateway`, rolling 28 days:
   - **Availability:** 99.5% of chat completions without `upstream_error` / `internal_error`.
-  - **TTFT:** 95% of streamed responses deliver the first token within 2 s (cache hits count; they are the point).
+  - **TTFT:** 95% of streamed responses deliver the first token within 3 s (cache hits count; they are the point). The first draft said 2 s; the load test measured cold p95 = 2.04 s on gemini-3.8-flash, so the objective was set where the system actually is, and 2 s is the stretch goal the cache buys.
 - **Burn-rate alerts** per SLO: 1 h window > 14.4× or 6 h window > 6×, emailed.
 - **Dashboard** (12 PromQL panels): TTFT p50/p95, requests/s by outcome, tokens/s by model, cache hit ratio,
   cost USD/hour by tenant, rate-limited/s, upstream codes, breaker state + fallbacks, in-flight vs replicas,

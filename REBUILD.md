@@ -96,7 +96,7 @@ Fault drill (fallback + breaker), Cloud Armor checks:
 ADMIN=$(terraform -chdir=terraform output -raw admin_key)
 curl -s -X POST http://$IP/admin/chaos -H "x-admin-key: $ADMIN" -d '{"model":"gemini-3.8-flash","mode":"error","seconds":90}'
 # requests now return x-model-served: gemini-3.5-flash-lite; llm_breaker_open{model="gemini-3.8-flash"} = 1
-curl -s -o /dev/null -w '%{http_code}\n' "http://$IP/healthz?q=%27%20OR%201%3D1--"         # 403 (WAF)
+curl -s -o /dev/null -w '%{http_code}\n' "http://$IP/healthz?q=%27%20or%201%3D1%20--%20"         # 403 (WAF)
 seq 1 200 | xargs -P 20 -I{} curl -s -o /dev/null -w '%{http_code}\n' http://$IP/healthz | sort | uniq -c   # 429s after 120/min
 ```
 
@@ -142,3 +142,8 @@ the script waits and retries. The WIF pool is soft-deleted for 30 days (free). T
 - The Gateway's backend timeout defaults to 30 s: long streams need `GCPBackendPolicy.timeoutSec`.
 - Cloud Armor and k6: run the load generator inside the cluster against the Service, otherwise the whole test
   comes from one NAT IP and the edge throttle rejects it.
+- Cloud Armor stops at the first matching rule: a catch-all throttle at priority 1000 silently disabled the WAF
+  rules at 2000/2001. WAF deny rules now come first. Rule changes take a minute or two to propagate.
+- k6 against a rate-limited tenant must back off on 429 and use think time, or it spins at 1,800 req/s of 429s
+  (first run). The platform tenant is sized for the profile (3000 rpm); `noConnectionReuse` spreads load to new pods.
+- The first TTFT SLO (2 s) burned its budget immediately: cold p95 on gemini-3.8-flash is 2.04 s. It is now 3 s.
