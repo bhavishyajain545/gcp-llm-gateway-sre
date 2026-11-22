@@ -39,7 +39,16 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /version", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, 200, map[string]string{"version": s.version, "default_model": s.cfg.DefaultModel})
 	})
-	mux.Handle("GET /metrics", promhttp.Handler())
+	// /metrics is for the in-cluster Prometheus collector only. Requests that arrived through the
+	// Google front end carry "Via: 1.1 google"; refuse those so tenant names and volumes stay private.
+	metrics := promhttp.Handler()
+	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(strings.ToLower(r.Header.Get("Via")), "google") {
+			http.NotFound(w, r)
+			return
+		}
+		metrics.ServeHTTP(w, r)
+	})
 	mux.HandleFunc("POST /admin/chaos", s.handleChaos)
 	mux.HandleFunc("GET /admin/chaos", s.handleChaosList)
 	return mux

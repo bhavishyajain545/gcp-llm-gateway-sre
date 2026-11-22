@@ -1,0 +1,82 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Architecture: LLM Gateway SRE on GKE</title>
+<style>
+  body{margin:0;background:#ffffff;font-family:Inter,Segoe UI,Arial,sans-serif;color:#1f2933}
+  .canvas{width:1400px;height:800px;position:relative;padding:36px;box-sizing:border-box}
+  h1{font-size:26px;margin:0 0 4px}
+  .sub{color:#5f6b7a;font-size:15px;margin-bottom:24px}
+  .box{position:absolute;border-radius:12px;padding:11px 13px;box-sizing:border-box;border:2px solid;background:#fff;box-shadow:0 2px 6px rgba(0,0,0,.06)}
+  .box b{display:block;font-size:14.5px;margin-bottom:3px}
+  .box span{font-size:12px;color:#5f6b7a;line-height:1.35}
+  .git{border-color:#5f6b7a}
+  .ci{border-color:#f4b400;background:#fff8e1}
+  .k8s{border-color:#4285f4;background:#eef4ff}
+  .data{border-color:#0f9d58;background:#ebf8f0}
+  .obs{border-color:#9334e6;background:#f6efff}
+  .ai{border-color:#e8710a;background:#fff3e8}
+  .edge{border-color:#d93025;background:#fdecea}
+  .zone{position:absolute;border:2px dashed #c3cbd5;border-radius:16px}
+  .zone label{position:absolute;top:-12px;left:16px;background:#fff;padding:0 8px;font-size:13px;color:#5f6b7a;font-weight:600}
+  svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+  .lbl{font-size:11.5px;fill:#5f6b7a}
+</style></head>
+<body><div class="canvas">
+  <h1>LLM Gateway SRE on GKE Standard: quotas, semantic cache, fallback, SLOs</h1>
+  <div class="sub">Project bj-llm-gateway · Terraform-provisioned · keyless from CI to pod · Gemini on Vertex AI</div>
+
+  <div class="zone" style="left:300px;top:112px;width:1064px;height:656px"><label>Google Cloud project: bj-llm-gateway (us-central1)</label></div>
+  <div class="zone" style="left:520px;top:160px;width:560px;height:525px;border-color:#9bb8f3"><label style="color:#4285f4">GKE Standard "llm-gateway" (zonal, private nodes, Dataplane V2, Workload Identity)</label></div>
+
+  <!-- left column: callers -->
+  <div class="box git" style="left:40px;top:150px;width:230px"><b>Tenants (OpenAI SDK / curl)</b><span>team-platform · team-support · team-burst<br>Authorization: Bearer sk-…<br>POST /v1/chat/completions (stream)</span></div>
+  <div class="box ci" style="left:40px;top:300px;width:230px"><b>GitHub Actions (CI)</b><span>go test → docker build → push<br>→ bump newTag in k8s/base<br>auth: OIDC → WIF → sa-github-ci</span></div>
+  <div class="box git" style="left:40px;top:440px;width:230px"><b>Operator</b><span>terraform apply · ./deploy.sh<br>POST /admin/chaos (fault drills)<br>kubectl from authorized_cidr</span></div>
+  <div class="box ci" style="left:40px;top:580px;width:230px"><b>Terraform</b><span>VPC+NAT+PSA · GKE + 2 node pools<br>Memorystore · Armor · Secret Manager<br>IAM/WIF · SLOs · alerts · dashboard</span></div>
+
+  <!-- edge -->
+  <div class="box edge" style="left:330px;top:160px;width:170px"><b>Global external ALB</b><span>Gateway API<br>gke-l7-global-external-managed<br>HTTPRoute → Service</span></div>
+  <div class="box edge" style="left:330px;top:275px;width:170px"><b>Cloud Armor</b><span>GCPBackendPolicy<br>120 req/min per IP → 429<br>SQLi / XSS WAF → 403</span></div>
+  <div class="box ci" style="left:330px;top:395px;width:170px"><b>Artifact Registry</b><span>apps/llm-gateway:sha-…<br>distroless, non-root</span></div>
+  <div class="box data" style="left:330px;top:500px;width:170px"><b>Cloud NAT</b><span>egress for private nodes</span></div>
+  <div class="box data" style="left:330px;top:590px;width:170px"><b>Secret Manager</b><span>tenants (keys+quotas)<br>admin key · redis addr+auth<br>read via Workload Identity</span></div>
+
+  <!-- cluster -->
+  <div class="box k8s" style="left:540px;top:195px;width:250px"><b>pool gateway-spot (1-3 Spot nodes)</b><span>Deployment llm-gateway, 2-8 replicas<br>HPA on in-flight requests per pod + CPU<br>PDB · spread · default-deny NetworkPolicy</span></div>
+  <div class="box k8s" style="left:810px;top:195px;width:250px"><b>pool system (1-2 on-demand nodes)</b><span>custom-metrics-stackdriver-adapter (WI)<br>Managed Prometheus collector<br>k6 load-test Job (loadtest/)</span></div>
+  <div class="box k8s" style="left:540px;top:318px;width:520px"><b>llm-gateway pod (Go) · request path</b><span>1 tenant key → 2 token bucket + daily token budget → 3 exact cache → 4 embed + semantic cache (cos ≥ 0.95)<br>→ 5 circuit breaker per model → 6 Vertex AI stream · fallback 3.8-flash → 3.5-flash-lite<br>/metrics: TTFT, tokens, cost, cache, breaker · OpenTelemetry spans · JSON logs with trace id</span></div>
+  <div class="box obs" style="left:540px;top:462px;width:250px"><b>Managed Prometheus</b><span>PodMonitoring /metrics every 15 s<br>llm_requests_total · llm_ttft_seconds<br>llm_inflight_requests → HPA</span></div>
+  <div class="box k8s" style="left:810px;top:462px;width:250px"><b>Workload Identity</b><span>KSA llm-gateway ⇄ GSA llm-gateway<br>aiplatform.user · secretAccessor<br>cloudtrace.agent · no key files</span></div>
+  <div class="box data" style="left:540px;top:585px;width:520px"><b>Memorystore for Redis (Private Service Access, AUTH)</b><span>ex:&lt;tenant|model&gt;:&lt;sha&gt; exact answers · sem:…:idx bounded window of prompt vectors · rl:&lt;tenant&gt; Lua token bucket · tok:&lt;tenant&gt;:&lt;day&gt; budgets · fault:&lt;model&gt; chaos · fail-open</span></div>
+
+  <!-- right column -->
+  <div class="box ai" style="left:1110px;top:160px;width:230px"><b>Vertex AI · Gemini</b><span>gemini-3.8-flash (global, thinking LOW)<br>fallback gemini-3.5-flash-lite<br>gemini-embedding-001 (us-central1)<br>streamGenerateContent?alt=sse</span></div>
+  <div class="box obs" style="left:1110px;top:320px;width:230px"><b>Cloud Monitoring</b><span>service llm-gateway<br>SLO 99.5% non-error completions<br>SLO 95% streams: first token &lt; 2 s<br>burn-rate alerts 1h/6h → email<br>12-panel PromQL dashboard</span></div>
+  <div class="box obs" style="left:1110px;top:490px;width:230px"><b>Cloud Trace</b><span>gateway → limiter → cache →<br>embed → vertex spans per request<br>correlated with Cloud Logging</span></div>
+  <div class="box ai" style="left:1110px;top:625px;width:230px"><b>Capacity &amp; cost model</b><span>docs/capacity.md: RPS per pod,<br>USD per 1k requests vs cache hit rate,<br>replicas = f(in-flight, TTFT)</span></div>
+
+  <svg>
+    <defs><marker id="a" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#5f6b7a"/></marker></defs>
+    <g stroke="#5f6b7a" stroke-width="2" fill="none" marker-end="url(#a)">
+      <path d="M270,190 L328,190"/>
+      <path d="M415,232 L415,273"/>
+      <path d="M500,300 C520,300 520,240 538,240"/>
+      <path d="M270,330 C300,330 300,430 328,430"/>
+      <path d="M500,430 C520,430 520,255 538,252" stroke-dasharray="5 4"/>
+      <path d="M270,470 C300,470 310,375 538,375" stroke-dasharray="5 4"/>
+      <path d="M665,275 L665,316"/>
+      <path d="M700,398 L700,460"/>
+      <path d="M800,528 L800,583"/>
+      <path d="M1060,350 L1108,225"/>
+      <path d="M1060,365 L1108,370"/>
+      <path d="M1060,380 L1108,530"/>
+      <path d="M790,500 L808,500"/>
+      <path d="M500,625 L538,625" stroke-dasharray="5 4"/>
+      <path d="M935,275 L935,316" stroke-dasharray="5 4"/>
+    </g>
+    <text class="lbl" x="275" y="182">HTTP :80</text>
+    <text class="lbl" x="1070" y="300">SSE</text>
+    <text class="lbl" x="706" y="452">15 s scrape</text>
+    <text class="lbl" x="806" y="578">6379</text>
+    
+  </svg>
+</div></body></html>

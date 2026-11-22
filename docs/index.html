@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM Gateway SRE</title>
+<meta name="description" content="An LLM gateway for Vertex AI Gemini run as an SRE would run it on GKE Standard: tenant quotas, semantic cache in Memorystore, model fallback behind circuit breakers, custom-metric HPA, Cloud Armor, SLOs with burn-rate alerts, k6 load tests and a capacity model. Terraform for everything.">
+<style>
+  :root{
+    --bg:#f7f8fa; --panel:#ffffff; --ink:#1b2430; --muted:#5b6775; --line:#dfe4ea;
+    --blue:#1a73e8; --blue-soft:#e8f0fe; --purple:#7b3fe4; --purple-soft:#f1ebfd;
+    --green:#188038; --green-soft:#e6f4ea; --amber:#b06000; --amber-soft:#fef3e0; --red:#c5221f; --red-soft:#fce8e6;
+    --code:#0f1419; --code-ink:#e6edf3; --radius:14px;
+  }
+  :root:not([data-theme="light"]) { color-scheme: light dark; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --bg:#0f1317; --panel:#171c22; --ink:#e7ecf2; --muted:#9aa7b4; --line:#2a323c;
+    --blue:#8ab4f8; --blue-soft:#15233a; --purple:#c58af9; --purple-soft:#261a3d;
+    --green:#81c995; --green-soft:#12301b; --amber:#fdd663; --amber-soft:#3a2d0b; --red:#f28b82; --red-soft:#3b1612;
+    --code:#0b0f14; --code-ink:#d7dde5;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0f1317; --panel:#171c22; --ink:#e7ecf2; --muted:#9aa7b4; --line:#2a323c;
+    --blue:#8ab4f8; --blue-soft:#15233a; --purple:#c58af9; --purple-soft:#261a3d;
+    --green:#81c995; --green-soft:#12301b; --amber:#fdd663; --amber-soft:#3a2d0b; --red:#f28b82; --red-soft:#3b1612;
+    --code:#0b0f14; --code-ink:#d7dde5;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 Inter,"Segoe UI",system-ui,-apple-system,Roboto,sans-serif}
+  a{color:var(--blue)}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 16px}
+  header{padding:56px 0 28px}
+  .eyebrow{color:var(--muted);font-size:14px;letter-spacing:.04em;text-transform:uppercase;margin:0 0 8px}
+  h1{font-size:clamp(28px,4.5vw,44px);line-height:1.15;margin:0 0 14px}
+  .lede{font-size:18px;color:var(--muted);max-width:780px;margin:0 0 20px}
+  .pills{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 18px}
+  .pill{font-size:13px;padding:5px 11px;border-radius:999px;border:1px solid var(--line);background:var(--panel)}
+  .cta{display:inline-flex;gap:10px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:10px 16px;border-radius:10px;background:var(--blue);color:#fff;text-decoration:none;font-weight:600}
+  .btn.ghost{background:transparent;color:var(--blue);border:1px solid var(--blue)}
+  nav.toc{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:5}
+  nav.toc .wrap{display:flex;gap:18px;overflow-x:auto;padding:10px 16px;font-size:14px;white-space:nowrap}
+  nav.toc a{text-decoration:none;color:var(--muted)} nav.toc a:hover{color:var(--ink)}
+  section{padding:40px 0;border-top:1px solid var(--line)}
+  h2{font-size:26px;margin:0 0 6px} .sub{color:var(--muted);margin:0 0 22px}
+  h3{font-size:18px;margin:26px 0 8px}
+  .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px}
+  .card b{display:block;margin-bottom:6px}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .card,.grid>*{min-width:0}
+  figure{margin:0;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:12px;overflow:auto}
+  figure img{display:block;width:100%;height:auto;border-radius:8px}
+  figcaption{font-size:14px;color:var(--muted);padding:8px 4px 0}
+  pre{background:var(--code);color:var(--code-ink);padding:14px 16px;border-radius:10px;overflow:auto;font:13.5px/1.55 Consolas,"Cascadia Mono",ui-monospace,monospace}
+  code{font-family:Consolas,"Cascadia Mono",ui-monospace,monospace;font-size:.93em;background:var(--blue-soft);padding:1px 5px;border-radius:5px;overflow-wrap:anywhere}
+  pre code{background:none;padding:0}
+  .tbl{overflow-x:auto;border-radius:var(--radius)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  th,td{padding:10px 12px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top;font-size:15px}
+  th{background:var(--blue-soft);font-weight:600}
+  tr:last-child td{border-bottom:0}
+  .steps{counter-reset:s;list-style:none;padding:0;margin:0;display:grid;gap:12px}
+  .steps li{position:relative;padding:14px 16px 14px 58px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;left:16px;top:14px;width:30px;height:30px;border-radius:50%;background:var(--blue);color:#fff;display:grid;place-items:center;font-weight:700;font-size:14px}
+  .steps li b{display:block;margin-bottom:4px}
+  .tag{display:inline-block;font-size:12px;padding:2px 8px;border-radius:6px;margin-right:6px;font-weight:600}
+  .t-run{background:var(--blue-soft);color:var(--blue)} .t-ai{background:var(--purple-soft);color:var(--purple)} .t-data{background:var(--green-soft);color:var(--green)} .t-ops{background:var(--amber-soft);color:var(--amber)} .t-sec{background:var(--red-soft);color:var(--red)}
+  .video{aspect-ratio:16/9;width:100%;border-radius:var(--radius);background:#000;border:1px solid var(--line)}
+  .kpi{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .kpi div{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px}
+  .kpi b{display:block;font-size:24px;line-height:1.2} .kpi span{font-size:13px;color:var(--muted)}
+  footer{padding:40px 0;color:var(--muted);font-size:14px;border-top:1px solid var(--line)}
+  svg text{font-family:Inter,"Segoe UI",system-ui,sans-serif}
+  .flow{width:100%;height:auto}
+  @media (max-width:640px){ th,td{font-size:14px} header{padding-top:36px} }
+</style>
+</head>
+<body>
+
+<header><div class="wrap">
+  <p class="eyebrow">Google Cloud portfolio · project 4 of the series</p>
+  <h1>LLM Gateway SRE on GKE Standard</h1>
+  <p class="lede">A Go gateway in front of Gemini on Vertex AI, run as an SRE team would run it: per-tenant keys and quotas, an exact + semantic Redis cache, model fallback behind circuit breakers, an autoscaler driven by in-flight requests, Cloud Armor at the edge, two SLOs with burn-rate alerts, a k6 load profile and a written capacity model. Terraform for every resource; keyless from CI to pod.</p>
+  <div class="pills">
+    <span class="pill">GKE Standard · Spot pool</span><span class="pill">Vertex AI Gemini</span><span class="pill">Memorystore Redis</span><span class="pill">Cloud Armor</span><span class="pill">Managed Prometheus</span><span class="pill">Custom-metric HPA</span><span class="pill">Cloud Trace</span><span class="pill">SLOs + burn rate</span><span class="pill">k6</span><span class="pill">Terraform</span><span class="pill">Go</span>
+  </div>
+  <div class="cta">
+    <a class="btn" href="#demo">Watch the demo</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre">Source on GitHub</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/REBUILD.md">Rebuild runbook</a>
+    <a class="btn ghost" href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/docs/capacity.md">Capacity model</a>
+  </div>
+</div></header>
+
+<nav class="toc"><div class="wrap">
+  <a href="#demo">Demo</a><a href="#architecture">Architecture</a><a href="#path">Request path</a><a href="#tenants">Tenants</a><a href="#scaling">Scaling</a><a href="#slo">SLOs</a><a href="#results">Results</a><a href="#security">Security</a><a href="#deploy">Deploy it</a><a href="#lessons">Lessons</a>
+</div></nav>
+
+<section id="demo"><div class="wrap">
+  <h2>Demo</h2>
+  <p class="sub">Narrated walkthrough: a streamed request → exact and semantic cache hits → tenant allow-list and 429s → the HPA scaling on in-flight requests while k6 runs → the dashboard → a fault drill with fallback and breaker → Cloud Armor 403/429 → SLOs → security posture.</p>
+  <video class="video" controls preload="metadata" poster="architecture.png">
+    <source src="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/raw/main/demo/demo.mp4" type="video/mp4">
+    <track kind="captions" src="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/raw/main/demo/captions.srt" srclang="en" label="English">
+    Your browser does not support the video tag. <a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/raw/main/demo/demo.mp4">Download demo.mp4</a>.
+  </video>
+  <p class="sub" style="margin-top:10px">Transcript: <a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/demo/transcript.md">demo/transcript.md</a> · Captions: <a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/demo/captions.srt">demo/captions.srt</a>. Every command in the video runs against the live platform; the load test, the fault and the Cloud Armor rejections are real.</p>
+</div></section>
+
+<section id="architecture"><div class="wrap">
+  <h2>Architecture</h2>
+  <p class="sub">Edge (global ALB + Cloud Armor) → gateway pods on a Spot pool → Vertex AI, with Memorystore for shared state, Secret Manager for every credential, and Managed Prometheus feeding both the SLOs and the autoscaler.</p>
+  <figure>
+    <img src="architecture.png" alt="Architecture diagram: tenants call a global external load balancer with Cloud Armor; GKE Standard runs the Go gateway on a Spot pool and the custom-metrics adapter on a system pool; the gateway uses Workload Identity to reach Vertex AI Gemini, Secret Manager and Cloud Trace, and Memorystore Redis over Private Service Access; Managed Prometheus feeds Cloud Monitoring SLOs and the HPA">
+    <figcaption>Everything inside the outer dashed box is Terraform. The inner box is the cluster: two node pools, the gateway namespace with its HPA, PDB, NetworkPolicy, Gateway, backend policy and PodMonitoring.</figcaption>
+  </figure>
+  <div class="grid" style="margin-top:16px">
+    <div class="card"><span class="tag t-run">Runtime</span><b>GKE Standard, zonal</b><p>Private nodes behind Cloud NAT, Dataplane V2, Workload Identity, Gateway API. An on-demand <code>system</code> pool for add-ons and a Spot <code>gateway</code> pool (1-3 nodes) for the stateless gateway. Zonal means no cluster management fee.</p></div>
+    <div class="card"><span class="tag t-ai">Model</span><b>Vertex AI Gemini</b><p><code>gemini-3.8-flash</code> from the global location with <code>thinkingLevel: LOW</code>; fallback <code>gemini-3.5-flash-lite</code>; <code>gemini-embedding-001</code> (256 dims) for the semantic cache. Called over REST with the pod's Workload Identity.</p></div>
+    <div class="card"><span class="tag t-data">State</span><b>Memorystore for Redis</b><p>Private Service Access, AUTH on. Holds the exact cache, the semantic index, the token buckets (Lua), the daily budgets and the chaos faults, so every replica shares one view. The gateway fails open if Redis is down.</p></div>
+    <div class="card"><span class="tag t-sec">Edge</span><b>Cloud Armor via GCPBackendPolicy</b><p>Per-IP throttle (120/min → 429) and the preconfigured SQLi and XSS WAF rules, attached to the backend service the Gateway creates. Backend timeout raised to 300 s for long streams.</p></div>
+    <div class="card"><span class="tag t-ops">Observability</span><b>Managed Prometheus → SLOs + HPA</b><p><code>PodMonitoring</code> every 15 s. The same series back two SLOs, a 12-panel dashboard and the HPA's custom metric through the Stackdriver adapter. OpenTelemetry spans land in Cloud Trace with the trace id in every log line.</p></div>
+    <div class="card"><span class="tag t-ops">Delivery</span><b>GitHub Actions, keyless</b><p>OIDC → Workload Identity Federation → <code>sa-github-ci</code> (Artifact Registry writer only). CI tests, builds <code>sha-&lt;commit&gt;</code>, pushes and bumps the kustomize tag; <code>./deploy.sh rollout</code> applies it. Cloud Deploy is project 5.</p></div>
+  </div>
+</div></section>
+
+<section id="path"><div class="wrap">
+  <h2>Request path</h2>
+  <p class="sub">One request, in order. Each step is a span in Cloud Trace and a counter in Prometheus.</p>
+  <figure>
+    <svg class="flow" viewBox="0 0 1040 170" role="img" aria-label="Request path: tenant key, token bucket and budget, exact cache, embed and semantic cache, circuit breaker, Vertex AI stream with fallback, then metrics, cost, budget and cache write">
+      <defs><marker id="ar" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#5b6775"/></marker></defs>
+      <g fill="var(--panel)" stroke="var(--line)" stroke-width="1.5">
+        <rect x="10" y="30" width="130" height="80" rx="12"/><rect x="160" y="30" width="130" height="80" rx="12"/><rect x="310" y="30" width="130" height="80" rx="12"/><rect x="460" y="30" width="130" height="80" rx="12"/><rect x="610" y="30" width="130" height="80" rx="12"/><rect x="760" y="30" width="130" height="80" rx="12"/><rect x="910" y="30" width="120" height="80" rx="12"/>
+      </g>
+      <g stroke="#5b6775" stroke-width="1.6" marker-end="url(#ar)"><line x1="140" y1="70" x2="158" y2="70"/><line x1="290" y1="70" x2="308" y2="70"/><line x1="440" y1="70" x2="458" y2="70"/><line x1="590" y1="70" x2="608" y2="70"/><line x1="740" y1="70" x2="758" y2="70"/><line x1="890" y1="70" x2="908" y2="70"/></g>
+      <g font-size="12.5" fill="currentColor" text-anchor="middle">
+        <text x="75" y="58" font-weight="600">1 Tenant key</text><text x="75" y="76">SHA-256 lookup</text><text x="75" y="92">401 / 403 model</text>
+        <text x="225" y="58" font-weight="600">2 Quotas</text><text x="225" y="76">token bucket (Lua)</text><text x="225" y="92">daily tokens → 429</text>
+        <text x="375" y="58" font-weight="600">3 Exact cache</text><text x="375" y="76">sha(messages+params)</text><text x="375" y="92">per tenant · model</text>
+        <text x="525" y="58" font-weight="600">4 Semantic</text><text x="525" y="76">embed last message</text><text x="525" y="92">cosine ≥ 0.95</text>
+        <text x="675" y="58" font-weight="600">5 Breaker</text><text x="675" y="76">5 fails / 30 s → open</text><text x="675" y="92">half-open probe</text>
+        <text x="825" y="58" font-weight="600">6 Vertex AI</text><text x="825" y="76">SSE stream, TTFT</text><text x="825" y="92">fallback on 429/5xx</text>
+        <text x="970" y="58" font-weight="600">7 Settle</text><text x="970" y="76">tokens, cost, budget</text><text x="970" y="92">cache write</text>
+      </g>
+      <text x="520" y="150" font-size="12.5" fill="var(--muted)" text-anchor="middle">Headers back: x-cache (miss | exact | semantic) · x-cache-score · x-model-served · x-ratelimit-* · x-budget-* · x-request-id</text>
+    </svg>
+  </figure>
+  <div class="grid" style="margin-top:16px">
+    <div class="card"><b>OpenAI-compatible in, Gemini out</b><p><code>POST /v1/chat/completions</code> with the usual <code>messages</code>, <code>stream</code>, <code>max_tokens</code>, <code>temperature</code>. System messages become <code>systemInstruction</code>, <code>assistant</code> becomes <code>model</code>. Thinking tokens are billed as output and counted that way.</p></div>
+    <div class="card"><b>Fallback before the first byte only</b><p>If the primary fails before any chunk is sent, the fallback model answers and <code>x-model-served</code> says so. A stream that dies mid-way is reported inside the stream as an error, not retried: the client already has partial output.</p></div>
+    <div class="card"><b>Fail open on Redis</b><p>A Redis error means "no limit, cache miss", never a failed request. The gateway counts it (<code>llm_limiter_errors_total</code>) and the dashboard shows it. Availability over cost control.</p></div>
+    <div class="card"><b>Chaos is a feature</b><p><code>POST /admin/chaos</code> marks a model as failing (or slow) for N seconds, in Redis, so every replica rehearses the fallback and the breaker at once. The demo runs this drill live.</p></div>
+  </div>
+</div></section>
+
+<section id="tenants"><div class="wrap">
+  <h2>Tenants, quotas and cost attribution</h2>
+  <p class="sub">Keys and quotas are a JSON document in Secret Manager, written by Terraform from random passwords, re-read by the gateway every minute (rotation without restarts). Only hashes stay in memory.</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Tenant</th><th>Requests / min (burst)</th><th>Tokens / day</th><th>Models</th><th>Role in the demo</th></tr></thead>
+    <tbody>
+      <tr><td><code>team-platform</code></td><td>600 (100)</td><td>2,000,000</td><td>all</td><td>Normal traffic and the k6 ramp.</td></tr>
+      <tr><td><code>team-support</code></td><td>60 (10)</td><td>50,000</td><td><code>gemini-3.5-flash-lite</code></td><td>Asks for the big model → 403, never a silent downgrade.</td></tr>
+      <tr><td><code>team-burst</code></td><td>30 (10)</td><td>20,000</td><td>all</td><td>Bursts → the first ten pass, then 429 + <code>Retry-After</code>.</td></tr>
+    </tbody>
+  </table></div>
+  <p class="sub" style="margin-top:14px">Every answer increments <code>llm_tokens_total{tenant,model,kind}</code> and <code>llm_cost_usd_total{tenant,model}</code> from a price table (Billing-catalog list prices, overridable with <code>PRICES_JSON</code>), so the dashboard shows cost per hour per team and the finance conversation needs no extra tooling.</p>
+</div></section>
+
+<section id="scaling"><div class="wrap">
+  <h2>Scaling on the right signal</h2>
+  <div class="grid">
+    <div class="card"><b>Why not CPU</b><p>A gateway pod waiting on a model streams a few kilobytes per second and burns almost no CPU, yet it holds a connection, a goroutine and a slot in the provider's quota. CPU-based HPA would never scale it; in-flight requests per pod is the honest load signal.</p></div>
+    <div class="card"><b>How the metric reaches the HPA</b><p><code>llm_inflight_requests</code> → PodMonitoring (15 s) → Managed Prometheus → Cloud Monitoring → custom-metrics-stackdriver-adapter (Workload Identity, <code>monitoring.viewer</code>) → <code>prometheus.googleapis.com|llm_inflight_requests|gauge</code> → HPA target 4 per pod, 2-8 replicas, CPU 70% as a floor.</p></div>
+    <div class="card"><b>Spot nodes behind it</b><p>New replicas that do not fit trigger the cluster autoscaler on the Spot pool (1-3 nodes, 60-90% cheaper). A PDB of one, two minimum replicas and the global LB make preemption a non-event for a stateless gateway.</p></div>
+    <div class="card"><b>What the load test does</b><p>k6 in-cluster, three scenarios: a warm-cache loop (hits), a ramp of unique streaming prompts to 24 VUs (real Gemini traffic, TTFT = time to first byte), and a low-quota tenant bursting (expected 429s). Thresholds mirror the SLOs.</p></div>
+  </div>
+</div></section>
+
+<section id="slo"><div class="wrap">
+  <h2>SLOs and alerting</h2>
+  <p class="sub">Defined in Terraform on the Prometheus series, with SRE-workbook burn-rate thresholds. Created on the second <code>terraform apply</code>, once the metrics exist.</p>
+  <div class="grid">
+    <div class="card"><b>Availability SLO</b><p>99.5% of chat completions without a gateway or provider error, rolling 28 days. SLI: good/total on <code>llm_requests_total</code> with <code>outcome !~ upstream_error|internal_error</code>. 429s from quotas are <em>good</em>: they are the system working.</p></div>
+    <div class="card"><b>TTFT SLO</b><p>95% of streamed responses deliver the first token within 2 s. SLI: distribution cut on <code>llm_ttft_seconds</code>. Cache hits count, and they are the reason the number is achievable at all.</p></div>
+    <div class="card"><b>Burn-rate alerts</b><p>Per SLO: 1 h window &gt; 14.4× or 6 h window &gt; 6×, emailed. The policy text lists where to look first: breaker state, upstream codes, limiter errors, HPA vs in-flight, slow spans in Cloud Trace.</p></div>
+    <div class="card"><b>Dashboard</b><p>12 PromQL panels: TTFT p50/p95, requests/s by outcome, tokens/s by model, cache hit ratio, cost/hour by tenant, rate-limited/s, upstream codes, breaker + fallbacks, in-flight vs replicas, p95 by model, semantic score, limiter errors.</p></div>
+  </div>
+</div></section>
+
+<section id="results"><div class="wrap">
+  <h2>Results from the recorded run</h2>
+  <p class="sub">Numbers from the k6 run and the capacity model (<a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/docs/capacity.md">docs/capacity.md</a>). They are one afternoon's measurements on a demo cluster, not a benchmark.</p>
+  <div class="kpi" id="kpis">
+    <div><b>RESULT_TTFT_COLD</b><span>cold TTFT p95 (streamed, unique prompts)</span></div>
+    <div><b>RESULT_TTFT_WARM</b><span>warm TTFT p95 (cache hit)</span></div>
+    <div><b>RESULT_HIT</b><span>cache hits in the warm scenario</span></div>
+    <div><b>RESULT_PEAK</b><span>replicas at peak (HPA)</span></div>
+    <div><b>RESULT_ERR</b><span>gateway/provider error rate</span></div>
+    <div><b>RESULT_COST</b><span>list cost per 1k requests at measured hit rate</span></div>
+  </div>
+</div></section>
+
+<section id="security"><div class="wrap">
+  <h2>Security checklist</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Control</th><th>Where</th></tr></thead>
+    <tbody>
+      <tr><td>Private nodes, Cloud NAT egress, control plane limited to one CIDR, Shielded nodes, Dataplane V2, dedicated node SA with five roles</td><td><code>terraform/gke.tf</code>, <code>vpc.tf</code></td></tr>
+      <tr><td>Workload Identity for the gateway (<code>aiplatform.user</code>, <code>secretAccessor</code> on three secrets, <code>cloudtrace.agent</code>, <code>logWriter</code>) and for the metrics adapter; Workload Identity Federation for CI; zero service-account keys</td><td><code>terraform/iam.tf</code>, <code>.github/workflows/ci.yml</code></td></tr>
+      <tr><td>Tenant keys, admin key and Redis credentials in Secret Manager; no Kubernetes Secret, ConfigMap or image layer holds a credential</td><td><code>terraform/secrets.tf</code>, <code>gateway/main.go</code></td></tr>
+      <tr><td>Cloud Armor: per-IP throttle, preconfigured SQLi and XSS rules, request logging</td><td><code>terraform/armor.tf</code>, <code>k8s/base/backendpolicy.yaml</code></td></tr>
+      <tr><td>Namespace at Pod Security <code>restricted</code>; pod non-root (uid 65532), read-only root FS, no privilege escalation, all capabilities dropped, seccomp RuntimeDefault, no SA token mount, limits, PDB</td><td><code>k8s/base/namespace.yaml</code>, <code>deployment.yaml</code></td></tr>
+      <tr><td>NetworkPolicy default-deny; ingress from Google front ends, the Prometheus collector and the k6 job only; egress to DNS, the GKE metadata server, Google APIs on 443 and Redis on 6379 only</td><td><code>k8s/base/networkpolicy.yaml</code></td></tr>
+      <tr><td><code>/metrics</code> refuses requests that came through the load balancer; <code>/admin/*</code> needs the admin key; cache namespaced per tenant and model</td><td><code>gateway/handlers.go</code></td></tr>
+      <tr><td>Distroless static image, pinned modules, registry retention of 10 versions</td><td><code>gateway/Dockerfile</code>, <code>terraform/registry.tf</code></td></tr>
+    </tbody>
+  </table></div>
+</div></section>
+
+<section id="deploy"><div class="wrap">
+  <h2>Deploy it yourself</h2>
+  <p class="sub">Full from-zero runbook (org-policy override, second apply for the SLOs, fault drill, teardown that removes the load balancer): <a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre/blob/main/REBUILD.md">REBUILD.md</a>. About 25 minutes; ₹400-500 a day while it runs.</p>
+  <ol class="steps">
+    <li><b>Configure</b><code>cp terraform/terraform.tfvars.example terraform/terraform.tfvars</code>: project id, zone, your public IP as <code>authorized_cidr</code>, alert email, GitHub repo.</li>
+    <li><b>Bring up</b><code>./deploy.sh</code>: Terraform, first image with Cloud Build, kubeconfig, the custom-metrics adapter with its Workload Identity annotation, <code>kubectl apply -k k8s/base</code>, then the Gateway address.</li>
+    <li><b>Load test</b><code>loadtest/run.sh</code> runs the k6 Job in-cluster; watch <code>kubectl -n llm-gateway get hpa -w</code> and the dashboard.</li>
+    <li><b>SLOs</b><code>./deploy.sh slo</code>: the second apply creates the two SLOs and their burn-rate alerts once the series exist.</li>
+    <li><b>Drill</b><code>POST /admin/chaos</code> with the admin key; watch <code>x-model-served</code> flip and <code>llm_breaker_open</code> go to 1. Then try the WAF payload and the 200-request burst against Cloud Armor.</li>
+    <li><b>Clean up</b><code>./teardown.sh</code>, then <code>./audit-billing.sh</code> should print empty sections.</li>
+  </ol>
+</div></section>
+
+<section id="lessons"><div class="wrap">
+  <h2>What I learned building it</h2>
+  <div class="grid">
+    <div class="card"><b>Gemini 3 thinks unless told how much</b><p>With <code>maxOutputTokens: 64</code> and no thinking config the first test reply was empty: 61 thinking tokens had used the budget. The gateway sends <code>thinkingLevel: LOW</code> for every <code>gemini-3*</code> model and counts thinking tokens as output cost.</p></div>
+    <div class="card"><b>Fallback names must exist</b><p><code>gemini-3.8-flash-lite</code> does not exist as a text model (only a TTS variant). Listing the publisher models before choosing the fallback saved a 404 in production.</p></div>
+    <div class="card"><b>Workload Identity needs two metadata addresses</b><p>Under a default-deny NetworkPolicy, token requests to 169.254.169.254:80 and the GKE metadata server on 169.254.169.252:988 must both be allowed, or every Google API call times out with a misleading error.</p></div>
+    <div class="card"><b>A quota rejection is not an error</b><p>Counting 429s against availability would page on a noisy tenant doing exactly what the quota is for. The SLI excludes them and the dashboard shows them separately.</p></div>
+    <div class="card"><b>Measure the load from inside</b><p>The first idea was k6 from a laptop through the LB. With Cloud Armor's per-IP throttle on, that test would mostly measure the throttle. The Job runs in-cluster against the Service; the Armor check is a separate, deliberate burst.</p></div>
+    <div class="card"><b>Chaos must be cluster-wide</b><p>A per-pod fault flag looked fine in unit tests and useless with two replicas behind a load balancer. Faults moved to Redis with a TTL and a one-second local cache.</p></div>
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  Bhavishya Jain · <a href="https://github.com/bhavishyajain545/gcp-llm-gateway-sre">github.com/bhavishyajain545/gcp-llm-gateway-sre</a> · Part of a Google Cloud portfolio: <a href="https://bhavishyajain545.github.io/gcp-gemini-rag-agent/">Gemini RAG agent</a> · <a href="https://bhavishyajain545.github.io/gcp-gke-platform/">GKE GitOps platform</a> · <a href="https://bhavishyajain545.github.io/gcp-data-ai-pipeline/">Data + AI pipeline</a> · <a href="https://portfolio.futurnex.io">portfolio.futurnex.io</a>
+</div></footer>
+</body>
+</html>

@@ -46,7 +46,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	faults := NewFaultInjector()
+	faults := NewFaultInjector(nil) // Redis is attached below once the address is known
 	vertex, err := NewVertexClient(ctx, cfg, faults)
 	if err != nil {
 		slog.Error("vertex client", "err", err)
@@ -77,6 +77,7 @@ func main() {
 		DialTimeout: 2 * time.Second, ReadTimeout: 500 * time.Millisecond, WriteTimeout: 500 * time.Millisecond,
 		PoolSize: 50, MinIdleConns: 5,
 	})
+	faults.rdb = rdb // chaos faults are shared by every replica
 
 	tenants := NewTenantStore()
 	if cfg.TenantsJSON != "" {

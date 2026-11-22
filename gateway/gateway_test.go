@@ -121,7 +121,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *fakeUpstream, *Server) {
 	srv := &Server{
 		cfg: cfg, version: "test", up: fake,
 		cache: NewCache(rdb, cfg.CacheTTL, cfg.SemanticThreshold, cfg.SemanticMax), lim: NewLimiter(rdb),
-		router: NewRouter(cfg), tenants: store, faults: NewFaultInjector(), prices: loadPrices(""), rdb: rdb,
+		router: NewRouter(cfg), tenants: store, faults: NewFaultInjector(rdb), prices: loadPrices(""), rdb: rdb,
 	}
 	hs := httptest.NewServer(srv.routes())
 	t.Cleanup(hs.Close)
@@ -313,6 +313,14 @@ func TestChaosEndpoint(t *testing.T) {
 	}
 	if f, ok := srv.faults.Get("gemini-3.8-flash"); !ok || f.Mode != "error" {
 		t.Fatalf("fault not stored: %+v %v", f, ok)
+	}
+	// a second replica sharing the same Redis sees the fault too
+	other := NewFaultInjector(srv.rdb)
+	if f, ok := other.Get("gemini-3.8-flash"); !ok || f.Mode != "error" {
+		t.Fatalf("fault not shared through Redis: %+v %v", f, ok)
+	}
+	if n := len(other.List()); n != 1 {
+		t.Fatalf("list = %d faults, want 1", n)
 	}
 	req, _ = http.NewRequest(http.MethodPost, hs.URL+"/admin/chaos", strings.NewReader(`{"model":"gemini-3.8-flash","mode":"clear"}`))
 	req.Header.Set("x-admin-key", "admin-secret")
