@@ -38,7 +38,7 @@ def wsl(cmd: str, timeout: int = 300) -> str:
     root = "/mnt/" + ROOT.drive[0].lower() + ROOT.as_posix()[2:]
     full = f"source ~/.gcp-env.sh; export USE_GKE_GCLOUD_AUTH_PLUGIN=True; cd {root}; {cmd}"
     try:
-        r = subprocess.run(["wsl", "-e", "bash", "-c", full], capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(["wsl", "-e", "bash", "-c", full], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
         return (r.stdout + r.stderr).strip()
     except subprocess.TimeoutExpired:
         return "(timed out)"
@@ -53,14 +53,16 @@ def cdp_available() -> bool:
         return False
 
 
-async def type_cmd(page, cmd: str, type_delay: int = 7) -> None:
+async def type_cmd(page, cmd: str, type_delay: int = 7, chunk: int = 4) -> None:
+    """Type a command a few characters per CDP round-trip: one evaluate per character stalled
+    behind the screencast frames (take 5: a 330-char command took 25 s to appear)."""
     await page.evaluate("(c) => window.__prompt(c)", "")
-    for ch in cmd:
-        await page.evaluate("(c) => window.__type(c)", ch)
-        await asyncio.sleep(type_delay / 1000)
+    for i in range(0, len(cmd), chunk):
+        await page.evaluate("(c) => window.__type(c)", cmd[i:i + chunk])
+        await asyncio.sleep(type_delay * chunk / 1000)
 
 
-async def live_steps(page, steps, type_delay: int = 7, pause: float = 0.45, hold: float = 2.5) -> None:
+async def live_steps(page, steps, type_delay: int = 7, pause: float = 0.45, hold: float = 3.5) -> None:
     """Type (command, producer) pairs into the open terminal; producers run in a thread while the
     cursor blinks, so the recording never shows a stale frame."""
     for cmd, producer in steps:
@@ -86,7 +88,7 @@ NARRATION = {
     ),
     "request": (
         "First, a real request through the load balancer. The models endpoint lists what this tenant may use, with the fallback and the list price per million tokens. "
-        "Then a streamed chat completion: the gateway translates it to Gemini's streaming API, relays the tokens as server-sent events, "
+        "Then a streamed chat completion with the cache bypassed, so this one goes to the model: the gateway translates it to Gemini's streaming API, relays the tokens as server-sent events, "
         "and reports time to first token. That first-token time is the latency a user feels, so it is the metric the SLO is built on."
     ),
     "cache": (
@@ -137,7 +139,7 @@ NARRATION = {
 
 async def main() -> None:
     use_cdp = cdp_available()
-    demo = Demo(out_dir=HERE, cdp_url=CDP_URL if use_cdp else None)
+    demo = Demo(out_dir=HERE, cdp_url=CDP_URL if use_cdp else None, max_silence=5.0, tail=4.0)
     await demo.prepare(*NARRATION.values())
 
     # ---- real data for the terminal scenes (collected before recording) ----
@@ -192,6 +194,8 @@ async def main() -> None:
     q = "What is an error budget? Answer in two sentences."
     body_stream = json.dumps({"model": "gemini-3.8-flash", "stream": True, "messages": [{"role": "user", "content": q}]})
     body_plain = json.dumps({"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": q}]})
+    tokens_filter = ("tee /tmp/sse.txt >/dev/null; grep '^data: {' /tmp/sse.txt | sed 's/^data: //' | jq -rj '.choices[0].delta.content // empty' | fold -s -w 150; "
+                     "echo; echo '[DONE]'; tail -1 /tmp/sse.txt")
 
     async def s2():
         await demo.terminal("llm-gateway through the global load balancer", [])
@@ -199,13 +203,13 @@ async def main() -> None:
             (f"export GW={api} KEY=$(terraform output -raw tenant_key_team_platform)", ""),
             ("curl -s $GW/v1/models -H \"Authorization: Bearer $KEY\" | jq -c '.data[]'",
              lambda: curl(f"{api}/v1/models -H 'Authorization: Bearer {k_plat}' | jq -c '.data[]'")),
-            ("curl -sN $GW/v1/chat/completions -H \"Authorization: Bearer $KEY\" -d '{\"model\":\"gemini-3.8-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"" + q + "\"}]}' -w '\\nTTFT %{time_starttransfer}s  total %{time_total}s'",
-             lambda: trim(curl(f"-N {api}/v1/chat/completions -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{body_stream}' -w '\\nTTFT %{{time_starttransfer}}s  total %{{time_total}}s' | grep -v '^$' | cut -c1-150"), 1800)),
+            ("curl -sN $GW/v1/chat/completions -H \"Authorization: Bearer $KEY\" -H 'Cache-Control: no-cache' -d '{\"model\":\"gemini-3.8-flash\",\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":\"" + q + "\"}]}' -w '\\nTTFT %{time_starttransfer}s  total %{time_total}s' | jq -rj '.choices[0].delta.content // empty'",
+             lambda: trim(curl(f"-N {api}/v1/chat/completions -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -H 'Cache-Control: no-cache' -d '{body_stream}' -w '\\nTTFT %{{time_starttransfer}}s  total %{{time_total}}s' | {tokens_filter}"), 1800)),
         ], type_delay=5)
     await demo.scene("First request", NARRATION["request"], s2, hold=1.0)
 
     # ---- 3 cache ----
-    q2 = "In two sentences, what's an error budget?"
+    q2 = "In two sentences, what is an error budget?"
     body_para = json.dumps({"model": "gemini-3.8-flash", "messages": [{"role": "user", "content": q2}]})
 
     async def s3():
@@ -217,7 +221,7 @@ async def main() -> None:
             ("curl -s $GW/v1/chat/completions -D - -o /dev/null -H \"Authorization: Bearer $KEY\" -d '{\"messages\":[{\"role\":\"user\",\"content\":\"" + q2 + "\"}]}' -w 'time_total %{time_total}s' | grep -iE 'x-cache|x-model|time_total'",
              lambda: curl(f"{api}/v1/chat/completions {hdr} -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{body_para}' | grep -iE 'x-cache|x-model|time_total'")),
             ("curl -s $GW/v1/chat/completions -H \"Authorization: Bearer $KEY\" -d '…paraphrase…' | jq -r '.choices[0].message.content'",
-             lambda: curl(f"{api}/v1/chat/completions -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{body_para}' | jq -r '.choices[0].message.content'")),
+             lambda: curl(f"{api}/v1/chat/completions -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{body_para}' | jq -r '.choices[0].message.content' | fold -s -w 150")),
         ], type_delay=5)
     await demo.scene("Cache", NARRATION["cache"], s3, hold=1.0)
 
@@ -235,6 +239,26 @@ async def main() -> None:
         ], type_delay=5)
     await demo.scene("Quotas", NARRATION["quotas"], s4, hold=1.0)
 
+    # ---- 6 dashboard ----
+    if use_cdp:
+        async def s6():
+            await demo.capture(dash_tab)
+            try:
+                await dash_tab.wait_for_selector("text=TTFT", timeout=8000)
+            except Exception:
+                await dash_tab.reload(wait_until="commit")
+                try:
+                    await dash_tab.wait_for_selector("text=TTFT", timeout=60000)
+                except Exception:
+                    pass
+            await asyncio.sleep(8)
+            await dash_tab.mouse.move(1100, 650)
+            await dash_tab.mouse.wheel(0, 450)
+            await asyncio.sleep(6)
+            await dash_tab.mouse.wheel(0, 450)
+        await demo.scene("Dashboard", NARRATION["dashboard"], s6, hold=1.5)
+        await demo.capture(page)
+
     # ---- 5 HPA + Spot scale-out ----
     async def s5():
         await demo.terminal("Autoscaling on in-flight requests (custom metric) + Spot nodes", [])
@@ -248,30 +272,6 @@ async def main() -> None:
         ], type_delay=5)
     await demo.scene("Autoscaling", NARRATION["hpa"], s5, hold=1.0)
 
-    # ---- 6 dashboard ----
-    if use_cdp:
-        async def s6():
-            await demo.capture(dash_tab)
-            for name in ("Close", "Dismiss"):  # Gemini Cloud Assist / tour pop-ups cover the first panels
-                try:
-                    await dash_tab.get_by_role("button", name=name).first.click(timeout=1500)
-                except Exception:
-                    pass
-            try:
-                await dash_tab.wait_for_selector("text=TTFT", timeout=8000)
-            except Exception:
-                await dash_tab.reload(wait_until="commit")
-                try:
-                    await dash_tab.wait_for_selector("text=TTFT", timeout=60000)
-                except Exception:
-                    pass
-            await asyncio.sleep(3)
-            await dash_tab.mouse.wheel(0, 500)
-            await asyncio.sleep(6)
-            await dash_tab.mouse.wheel(0, 500)
-        await demo.scene("Dashboard", NARRATION["dashboard"], s6, hold=1.5)
-        await demo.capture(page)
-
     # ---- 7 chaos: fallback + breaker ----
     async def s7():
         await demo.terminal("Fault drill: primary model failing → fallback + circuit breaker", [])
@@ -280,10 +280,10 @@ async def main() -> None:
         await live_steps(page, [
             ("curl -s -X POST $GW/admin/chaos -H \"x-admin-key: $ADMIN\" -d '{\"model\":\"gemini-3.8-flash\",\"mode\":\"error\",\"seconds\":75}'",
              lambda: curl(f"-X POST {api}/admin/chaos -H 'x-admin-key: {admin}' -H 'content-type: application/json' -d '{chaos}'")),
-            ("for i in 1 2 3 4 5 6; do curl -s $GW/v1/chat/completions -D - -o /dev/null -H \"Authorization: Bearer $KEY\" -d \"{…unique prompt $i…}\" | grep -iE 'x-model-served'; done",
-             lambda: "\n".join(curl(f"{api}/v1/chat/completions -D - -o /dev/null -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{uniq(i)}' | grep -iE 'x-model-served' | tr -d '\\r'") for i in range(1, 7))),
-            (f"kubectl -n {NS} port-forward deploy/llm-gateway 18080:8080 & sleep 2; curl -s localhost:18080/metrics | grep -E '^llm_(breaker_open|fallbacks_total|faults_applied_total)'",
-             lambda: wsl(f"(timeout 12 kubectl -n {NS} port-forward deploy/llm-gateway 18080:8080 >/dev/null 2>&1 &) ; sleep 3; curl -s localhost:18080/metrics | grep -E '^llm_(breaker_open|fallbacks_total|faults_applied_total)'", timeout=60)),
+            ("for i in $(seq 1 10); do curl -s $GW/v1/chat/completions -D - -o /dev/null -H \"Authorization: Bearer $KEY\" -d \"{…unique prompt $i…}\" | grep -iE 'x-model-served'; done",
+             lambda: "\n".join(curl(f"{api}/v1/chat/completions -D - -o /dev/null -H 'Authorization: Bearer {k_plat}' -H 'content-type: application/json' -d '{uniq(i)}' | grep -iE 'x-model-served' | tr -d '\\r'") for i in range(1, 11))),
+            (f"kubectl -n {NS} port-forward deploy/llm-gateway 18081:8080 & curl -s localhost:18081/metrics | grep -E '^llm_(breaker_open|fallbacks_total|faults_applied_total)'",
+             lambda: wsl(f"(timeout 45 kubectl -n {NS} port-forward deploy/llm-gateway 18081:8080 >/dev/null 2>&1 &) ; for i in $(seq 1 60); do curl -sf localhost:18081/metrics >/tmp/m.txt 2>/dev/null && break; sleep 0.5; done; grep -E '^llm_(breaker_open|fallbacks_total|faults_applied_total)' /tmp/m.txt", timeout=60)),
             ("curl -s -X POST $GW/admin/chaos -H \"x-admin-key: $ADMIN\" -d '{\"model\":\"gemini-3.8-flash\",\"mode\":\"clear\"}'",
              lambda: curl(f"-X POST {api}/admin/chaos -H 'x-admin-key: {admin}' -H 'content-type: application/json' -d '{{\"model\":\"gemini-3.8-flash\",\"mode\":\"clear\"}}'")),
         ], type_delay=5)

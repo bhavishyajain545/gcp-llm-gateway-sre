@@ -70,6 +70,8 @@ and nothing else are created on the second pass.
 
 ## 4. Verify
 
+`./smoke.sh` runs all of the following in one go (`./smoke.sh --port-forward` before the LB is ready).
+
 ```bash
 IP=$(kubectl -n llm-gateway get gateway external -o jsonpath='{.status.addresses[0].value}')
 KEY=$(terraform -chdir=terraform output -json tenant_keys | jq -r '."team-platform"')

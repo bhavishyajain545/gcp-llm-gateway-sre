@@ -19,7 +19,7 @@ OpenAI-compatible, so every client library works unchanged:
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /v1/chat/completions` | Chat, `stream: true` for SSE. Headers back: `x-cache` (miss / exact / semantic), `x-model-served`, `x-ratelimit-*`, `x-budget-*`, `x-request-id`. |
+| `POST /v1/chat/completions` | Chat, `stream: true` for SSE. `Cache-Control: no-cache` skips cache lookups (for prompts that differ only in a number). Headers back: `x-cache` (miss / exact / semantic), `x-cache-score`, `x-model-served`, `x-ratelimit-*`, `x-budget-*`, `x-request-id`. |
 | `GET /v1/models` | Models the tenant may use, with fallback and list price. |
 | `POST /admin/chaos` | Fault injection per model (`error` or `latency`, timed) to rehearse fallback and breakers. `x-admin-key`. |
 | `GET /healthz` · `GET /readyz` | Liveness; readiness = Redis reachable and tenants loaded. |
@@ -72,6 +72,7 @@ loadtest/           k6.js (warm cache / unique streaming / burst tenant), in-clu
 .github/workflows/  ci.yml: test → build → push → bump tag (keyless via WIF)
 cloudbuild.yaml     bootstrap build with sa-build (first image before CI exists)
 deploy.sh           terraform → image → kubeconfig → adapter → kubectl apply -k → gateway IP   (rollout | slo modes)
+smoke.sh            end-to-end check: models, cold stream + TTFT, exact/semantic hits, 403, parallel 429s, WAF, 401
 teardown.sh         k8s objects → terraform destroy → LB leftovers → destroy again → audit
 demo/               recorder.py + scenes.py: automated demo video with Cloud Text-to-Speech narration
 docs/               architecture diagram (HTML + PNG), docs site, capacity.md
